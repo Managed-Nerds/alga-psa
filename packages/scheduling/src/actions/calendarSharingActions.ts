@@ -25,7 +25,9 @@ import type {
   IVisibleCalendar,
 } from '@alga-psa/types';
 import {
+  DEFAULT_GROUP_CALENDAR_COLOR,
   GROUP_ACCESS_LEVELS,
+  listVisibleGroupCalendars,
   PERSONAL_ACCESS_LEVELS,
   personalCalendarColor,
   resolveCalendarAccess,
@@ -39,8 +41,6 @@ interface SharingUser {
   user_id: string;
   user_type?: string;
 }
-
-const DEFAULT_GROUP_CALENDAR_COLOR = '#6366f1';
 
 function fail<T>(error: string): CalendarSharingResult<T> {
   return { success: false, error };
@@ -359,12 +359,7 @@ export const getCalendarsVisibleToMe = withAuth(async (
       const [selfRow, peopleRows, groupRows] = await Promise.all([
         scoped.table('users').where({ user_id: user.user_id }).first('first_name', 'last_name', 'username'),
         access.canViewAll || access.userLevels.size > 0 ? peopleQuery : Promise.resolve([]),
-        access.groupLevels.size > 0
-          ? scoped.table('calendars')
-              .whereIn('calendar_id', Array.from(access.groupLevels.keys()))
-              .select('calendar_id', 'name', 'description', 'color', 'is_archived')
-              .orderBy('name', 'asc')
-          : Promise.resolve([]),
+        listVisibleGroupCalendars(trx, tenant, access),
       ]);
 
       const me: IVisibleCalendar = {
@@ -387,16 +382,16 @@ export const getCalendarsVisibleToMe = withAuth(async (
         access_level: access.canViewAll ? 'edit' : access.userLevels.get(row.user_id)!,
       }));
 
-      const groups: IVisibleCalendar[] = groupRows.map((row: any): IVisibleCalendar => ({
+      const groups: IVisibleCalendar[] = groupRows.map((row): IVisibleCalendar => ({
         key: row.calendar_id,
         calendar_type: 'group',
         calendar_id: row.calendar_id,
         owner_user_id: null,
         name: row.name,
         description: row.description,
-        color: row.color || DEFAULT_GROUP_CALENDAR_COLOR,
-        access_level: access.groupLevels.get(row.calendar_id)!.level,
-        is_archived: !!row.is_archived,
+        color: row.color,
+        access_level: row.access_level,
+        is_archived: row.is_archived,
       }));
 
       return {

@@ -1876,6 +1876,71 @@ export class ApiTimeSheetController extends ApiBaseController {
   }
 
   /**
+   * List the group calendars visible to the caller
+   */
+  listScheduleCalendars() {
+    return async (req: NextRequest): Promise<NextResponse> => {
+      try {
+        // Authenticate
+        const apiKey = req.headers.get('x-api-key');
+        
+        if (!apiKey) {
+          throw new UnauthorizedError('API key required');
+        }
+
+        // Extract tenant ID
+        let tenantId = req.headers.get('x-tenant-id');
+        let keyRecord;
+
+        if (tenantId) {
+          keyRecord = await ApiKeyServiceForApi.validateApiKeyForTenant(apiKey, tenantId);
+        } else {
+          keyRecord = await ApiKeyServiceForApi.validateApiKeyAnyTenant(apiKey);
+          if (keyRecord) {
+            tenantId = keyRecord.tenant;
+          }
+        }
+        
+        if (!keyRecord) {
+          throw new UnauthorizedError('Invalid API key');
+        }
+
+        // Get user
+        const user = await findUserByIdForApi(keyRecord.user_id, tenantId!);
+
+        assertInternalApiUser(user);
+
+        await this.assertManualProductAccess(req, keyRecord, user);
+
+        // Check permissions
+        const db = await getConnection(tenantId!);
+        const hasReadPermission = await hasPermission(
+          user,
+          'user_schedule',
+          'read',
+          db
+        );
+
+        if (!hasReadPermission) {
+          throw new ForbiddenError('Permission denied: Cannot read schedules');
+        }
+
+        const calendars = await runWithTenant(tenantId!, async () => {
+          return await this.timeSheetService.getVisibleGroupCalendars({
+            userId: user.user_id,
+            user,
+            tenant: tenantId!,
+          });
+        });
+
+        return createSuccessResponse(calendars);
+      } catch (error) {
+        return handleApiError(error);
+      }
+    };
+  }
+
+  /**
    * Get schedule entry by ID
    * Overrides the base getById, which is only routed for /api/v1/schedules/[id]
    */

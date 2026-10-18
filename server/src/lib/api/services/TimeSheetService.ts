@@ -33,10 +33,16 @@ import { ensureTimePeriodCoversDate } from '@alga-psa/scheduling/lib/timePeriodM
 import { Temporal } from '@js-temporal/polyfill';
 import { hasPermission } from '../../auth/rbac';
 import {
+  assertEditableGroupCalendar,
   buildVisibilityFilter,
   evaluateEntryAccess,
+  groupLevelFor,
+  levelAtLeast,
+  listVisibleGroupCalendars,
   resolveCalendarAccess,
   type CalendarAccess,
+  type GroupCalendarPlacementError,
+  type VisibleGroupCalendar,
 } from '@alga-psa/scheduling/lib/calendarAccess';
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError } from '../middleware/apiMiddleware';
 
@@ -1071,6 +1077,19 @@ export class TimeSheetService extends BaseService<any> {
     }
 
 
+  /** Group calendars visible to the caller, with their effective access level. */
+  async getVisibleGroupCalendars(context: ServiceContext): Promise<VisibleGroupCalendar[]> {
+      const { knex } = await this.getKnex();
+      const access = await resolveCalendarAccess(
+        knex,
+        context.tenant,
+        { user_id: context.userId },
+        await this.canViewAllSchedules(context)
+      );
+      return listVisibleGroupCalendars(knex, context.tenant, access);
+    }
+
+
   async createScheduleEntry(data: CreateScheduleEntryData, context: ServiceContext): Promise<any> {
       const { knex } = await this.getKnex();
       const ScheduleEntry = (await import('@alga-psa/shared/models/scheduleEntry')).default;
@@ -1085,6 +1104,21 @@ export class TimeSheetService extends BaseService<any> {
           workItemType = 'ad_hoc';
         }
 
+        // Group calendar placement: must be an editable, non-archived group
+        // calendar; group entries are never private.
+        const calendarId = data.calendar_id || null;
+        if (calendarId) {
+          const access = await resolveCalendarAccess(
+            trx,
+            context.tenant,
+            { user_id: context.userId },
+            await this.canViewAllSchedules(context)
+          );
+          throwGroupCalendarPlacementError(
+            await assertEditableGroupCalendar(trx, context.tenant, calendarId, access)
+          );
+        }
+
         // Use ScheduleEntry.create() which handles ticket/task assignment notifications
         const entry = await ScheduleEntry.create(trx, context.tenant, {
           title: data.title,
@@ -1093,10 +1127,11 @@ export class TimeSheetService extends BaseService<any> {
           work_item_id: data.work_item_id ?? null,
           work_item_type: workItemType,
           notes: data.notes,
-          is_private: data.is_private,
+          is_private: calendarId ? false : data.is_private,
           is_all_day: data.is_all_day ?? false,
           recurrence_pattern: data.recurrence_pattern ? JSON.parse(data.recurrence_pattern) : null,
           assigned_user_ids: data.assigned_user_ids || [],
+          calendar_id: calendarId,
           status: 'scheduled'
         }, {
           assignedUserIds: data.assigned_user_ids || [],
@@ -1153,7 +1188,38 @@ export class TimeSheetService extends BaseService<any> {
           ...data,
           updated_at: new Date()
         };
-  
+
+        // Moving onto, between or off group calendars: edit is required on
+        // the calendar the entry leaves and on the one it lands on.
+        if (data.calendar_id !== undefined) {
+          const targetCalendarId = data.calendar_id || null;
+          updateData.calendar_id = targetCalendarId;
+          if (targetCalendarId !== (existing.calendar_id ?? null)) {
+            const access = await resolveCalendarAccess(
+              trx,
+              context.tenant,
+              { user_id: context.userId },
+              await this.canViewAllSchedules(context)
+            );
+            if (existing.calendar_id && !levelAtLeast(groupLevelFor(existing.calendar_id, access), 'edit')) {
+              throw new ForbiddenError('Permission denied: Cannot move entries off this calendar');
+            }
+            if (targetCalendarId) {
+              throwGroupCalendarPlacementError(
+                await assertEditableGroupCalendar(trx, context.tenant, targetCalendarId, access)
+              );
+            } else if ((data.assigned_user_ids ?? assigneeIds).length === 0) {
+              // Personal entries are only visible through their assignees.
+              throw new BadRequestError('A personal schedule entry needs at least one assignee');
+            }
+          }
+        }
+        // Group calendar entries are never private.
+        const resultingCalendarId =
+          data.calendar_id !== undefined ? updateData.calendar_id : existing.calendar_id;
+        if (resultingCalendarId) {
+          updateData.is_private = false;
+        }
 
         const { validateAllDayInterval } = await import('@alga-psa/shared/models/scheduleEntry');
         validateAllDayInterval({
@@ -1187,9 +1253,10 @@ export class TimeSheetService extends BaseService<any> {
           .where({ entry_id: id })
           .first();
 
+        // Calendar sync reads each side's assignees from the snapshots.
         return {
-          existing,
-          updated,
+          existing: { ...existing, assignedUserIds: assigneeIds },
+          updated: { ...updated, assignedUserIds: data.assigned_user_ids ?? assigneeIds },
         };
       });
 
@@ -1484,6 +1551,13 @@ export class TimeSheetService extends BaseService<any> {
     // Similar to TimeEntryService implementation
     return { id: workItemId, title: 'Unknown Work Item', type: workItemType };
   }
+}
+
+/** Map a group calendar placement failure to the REST error for it. */
+function throwGroupCalendarPlacementError(error: GroupCalendarPlacementError | null): void {
+  if (!error) return;
+  if (error.reason === 'forbidden') throw new ForbiddenError(error.message);
+  throw new BadRequestError(error.message);
 }
 
 /**

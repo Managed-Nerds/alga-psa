@@ -344,11 +344,12 @@ export function registerWorkManagementV1Routes(registry: ApiOpenApiRegistry) {
     { method: 'get', path: '/api/v1/projects/{id}/tickets', summary: 'List project tickets', description: 'Lists tickets linked to project UUID.', family: 'project' },
 
     { method: 'get', path: '/api/v1/schedules', summary: 'List schedule entries', description: 'Lists schedule entries via ApiTimeSheetController.listScheduleEntries().', family: 'time_sheet' },
-    { method: 'post', path: '/api/v1/schedules', summary: 'Create schedule entry', description: 'Creates schedule entry via ApiTimeSheetController.createScheduleEntry().', family: 'time_sheet' },
+    { method: 'post', path: '/api/v1/schedules', summary: 'Create schedule entry', description: 'Creates schedule entry via ApiTimeSheetController.createScheduleEntry(). Optional calendar_id places it on a group calendar the caller can edit (see GET /api/v1/schedules/calendars); group entries are never private.', family: 'time_sheet' },
+    { method: 'get', path: '/api/v1/schedules/calendars', summary: 'List schedule calendars', description: 'Lists the group calendars visible to the caller (calendar_id, name, description, color, is_archived, access_level) via ApiTimeSheetController.listScheduleCalendars(). Pass calendar_id on schedule create/update to place an entry on one; edit access is required.', family: 'time_sheet' },
     { method: 'get', path: '/api/v1/schedules/search', summary: 'Search schedules', description: 'Current route delegates to ApiTimeSheetController.list() (time sheet list path), not schedule-specific search.', family: 'time_sheet' },
     { method: 'delete', path: '/api/v1/schedules/{id}', summary: 'Delete schedule entry', description: 'Deletes schedule entry via ApiTimeSheetController.deleteScheduleEntry().', family: 'time_sheet' },
     { method: 'get', path: '/api/v1/schedules/{id}', summary: 'Get schedule entry', description: 'Current route delegates to ApiTimeSheetController.getById() (time sheet read path), not schedule-specific getter.', family: 'time_sheet' },
-    { method: 'put', path: '/api/v1/schedules/{id}', summary: 'Update schedule entry', description: 'Updates schedule entry via ApiTimeSheetController.updateScheduleEntry().', family: 'time_sheet' },
+    { method: 'put', path: '/api/v1/schedules/{id}', summary: 'Update schedule entry', description: 'Updates schedule entry via ApiTimeSheetController.updateScheduleEntry(). calendar_id moves it onto a group calendar the caller can edit, or back to personal with null; group entries are never private.', family: 'time_sheet' },
     { method: 'get', path: '/api/v1/schedules/{id}/conflicts', summary: 'Get schedule conflicts', description: 'Current route delegates to ApiTimeSheetController.list() rather than conflict-specific schedule logic.', family: 'time_sheet' },
 
     { method: 'get', path: '/api/v1/tags', summary: 'List tags', description: 'Lists tags via ApiTagController.list().', family: 'tag' },
@@ -523,7 +524,7 @@ export function registerWorkManagementV1Routes(registry: ApiOpenApiRegistry) {
   function isLikelyList(def: Def) {
     if (def.method !== 'get') return false;
     if (def.path.endsWith('/search') || def.path.endsWith('/stats') || def.path.endsWith('/export') || def.path.endsWith('/cloud') || def.path.endsWith('/templates')) return true;
-    return ['/api/v1/projects', '/api/v1/tickets', '/api/v1/tags', '/api/v1/time-entries', '/api/v1/time-sheets', '/api/v1/time-periods', '/api/v1/schedules'].includes(def.path) ||
+    return ['/api/v1/projects', '/api/v1/tickets', '/api/v1/tags', '/api/v1/time-entries', '/api/v1/time-sheets', '/api/v1/time-periods', '/api/v1/schedules', '/api/v1/schedules/calendars'].includes(def.path) ||
       def.path.endsWith('/comments') || def.path.endsWith('/phases') || def.path.endsWith('/tickets') || def.path.endsWith('/entries') || def.path.endsWith('/summary') || def.path.endsWith('/checklist');
   }
 

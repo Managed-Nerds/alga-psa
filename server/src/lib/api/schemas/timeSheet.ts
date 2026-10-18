@@ -312,7 +312,9 @@ const baseScheduleEntrySchema = z.object({
   notes: z.string().optional(),
   is_private: z.boolean().optional().default(false),
   is_all_day: z.boolean().optional(),
-  recurrence_pattern: z.string().optional()
+  recurrence_pattern: z.string().optional(),
+  // Group calendar to place the entry on; null keeps (or moves it back to) the personal calendars.
+  calendar_id: uuidSchema.nullable().optional()
 });
 
 // Schedule entry schemas (simplified for time management context)
@@ -345,6 +347,7 @@ export const scheduleEntryResponseSchema = z.object({
   is_all_day: z.boolean(),
   status: z.string(),
   recurrence_pattern: z.string().nullable(),
+  calendar_id: uuidSchema.nullable(),
   created_by: uuidSchema,
   created_at: z.string().datetime(),
   updated_at: z.string().datetime(),

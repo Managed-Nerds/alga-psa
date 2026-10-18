@@ -14,6 +14,7 @@ import type { Knex } from 'knex';
 import { tenantDb } from '@alga-psa/db';
 import type { CalendarAccessLevel, IScheduleEntry } from '@alga-psa/types';
 import type { ScheduleEntryVisibilityFilter } from '@alga-psa/shared/models/scheduleEntry';
+import { DEFAULT_GROUP_CALENDAR_COLOR } from './calendarColors';
 
 const LEVEL_RANK: Record<CalendarAccessLevel, number> = {
   free_busy: 1,
@@ -243,6 +244,64 @@ export function groupLevelFor(
   return access.groupLevels.get(calendarId)?.level;
 }
 
+export interface GroupCalendarPlacementError {
+  /** `unavailable`: missing, archived or not a group calendar. `forbidden`: below edit. */
+  reason: 'unavailable' | 'forbidden';
+  message: string;
+}
+
+/**
+ * Validate a target group calendar for an entry: it must exist, be a
+ * non-archived group calendar, and the viewer must have edit or higher on it.
+ */
+export async function assertEditableGroupCalendar(
+  knexOrTrx: Knex | Knex.Transaction,
+  tenant: string,
+  calendarId: string,
+  access: CalendarAccess
+): Promise<GroupCalendarPlacementError | null> {
+  const calendar = await tenantDb(knexOrTrx, tenant).table('calendars')
+    .where({ calendar_id: calendarId })
+    .first('calendar_type', 'is_archived');
+  if (!calendar || calendar.calendar_type !== 'group' || calendar.is_archived) {
+    return { reason: 'unavailable', message: 'The selected calendar is not available.' };
+  }
+  if (!levelAtLeast(access.groupLevels.get(calendarId)?.level, 'edit')) {
+    return { reason: 'forbidden', message: 'Permission denied to add entries to this calendar.' };
+  }
+  return null;
+}
+
+export interface VisibleGroupCalendar {
+  calendar_id: string;
+  name: string;
+  description: string | null;
+  color: string;
+  is_archived: boolean;
+  access_level: CalendarAccessLevel;
+}
+
+/** Group calendars in `access`, with the viewer's effective level, ordered by name. */
+export async function listVisibleGroupCalendars(
+  knexOrTrx: Knex | Knex.Transaction,
+  tenant: string,
+  access: CalendarAccess
+): Promise<VisibleGroupCalendar[]> {
+  if (access.groupLevels.size === 0) return [];
+  const rows = await tenantDb(knexOrTrx, tenant).table('calendars')
+    .whereIn('calendar_id', Array.from(access.groupLevels.keys()))
+    .select('calendar_id', 'name', 'description', 'color', 'is_archived')
+    .orderBy('name', 'asc');
+  return rows.map((row: any): VisibleGroupCalendar => ({
+    calendar_id: row.calendar_id,
+    name: row.name,
+    description: row.description ?? null,
+    color: row.color || DEFAULT_GROUP_CALENDAR_COLOR,
+    is_archived: !!row.is_archived,
+    access_level: access.groupLevels.get(row.calendar_id)!.level,
+  }));
+}
+
 /** Whether the viewer may set this user as an assignee (self, admin, or edit on their calendar). */
 export function canAssignUser(userId: string, access: CalendarAccess): boolean {
   return (
@@ -345,4 +404,4 @@ export function applyEntryAccess(entries: IScheduleEntry[], access: CalendarAcce
   return result;
 }
 
-export { personalCalendarColor } from './calendarColors';
+export { personalCalendarColor, DEFAULT_GROUP_CALENDAR_COLOR } from './calendarColors';

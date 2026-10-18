@@ -52,13 +52,12 @@ import {
 import { resolveAppointmentTeamsMeetingContext } from '../lib/teamsMeetingContent';
 import {
   applyEntryAccess,
+  assertEditableGroupCalendar,
   buildVisibilityFilter,
   canAssignUser,
   evaluateEntryAccess,
-  levelAtLeast,
   maskEntry,
   resolveCalendarAccess,
-  type CalendarAccess,
 } from '../lib/calendarAccess';
 
 export type ScheduleActionResult<T> =
@@ -184,28 +183,6 @@ export const getScheduleEntries = withAuth(async (
   }
 });
 
-/**
- * Validate a target group calendar for an entry: it must exist, be a
- * non-archived group calendar, and the viewer must have edit or higher on it.
- */
-async function assertEditableGroupCalendar(
-  trx: Knex.Transaction,
-  tenant: string,
-  calendarId: string,
-  access: CalendarAccess
-): Promise<string | null> {
-  const calendar = await tenantDb(trx, tenant).table('calendars')
-    .where({ calendar_id: calendarId })
-    .first('calendar_type', 'is_archived');
-  if (!calendar || calendar.calendar_type !== 'group' || calendar.is_archived) {
-    return 'The selected calendar is not available.';
-  }
-  if (!levelAtLeast(access.groupLevels.get(calendarId)?.level, 'edit')) {
-    return 'Permission denied to add entries to this calendar.';
-  }
-  return null;
-}
-
 // Removed getScheduleEntriesByUser and getCurrentUserScheduleEntries as getScheduleEntries now handles permissions.
 
 export const addScheduleEntry = withAuth(async (
@@ -258,7 +235,7 @@ export const addScheduleEntry = withAuth(async (
         assertEditableGroupCalendar(trx, tenant, calendarId, access)
       );
       if (calendarError) {
-        return { success: false, error: calendarError };
+        return { success: false, error: calendarError.message };
       }
       entry.calendar_id = calendarId;
       entry.is_private = false;
@@ -626,7 +603,7 @@ export const updateScheduleEntry = withAuth(async (
           assertEditableGroupCalendar(trx, tenant, targetCalendarId, access)
         );
         if (calendarError) {
-          return { success: false, error: calendarError };
+          return { success: false, error: calendarError.message };
         }
       }
     }

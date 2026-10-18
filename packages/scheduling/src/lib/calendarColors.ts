@@ -3,6 +3,9 @@
  * UI and the server-side calendar list.
  */
 
+/** Color for a group calendar created without one. */
+export const DEFAULT_GROUP_CALENDAR_COLOR = '#6366f1';
+
 const PERSONAL_CALENDAR_PALETTE = [
   '#2563eb',
   '#16a34a',
