@@ -303,13 +303,14 @@ export class GoogleCalendarAdapter extends BaseCalendarAdapter {
   /**
    * Delete an event from Google Calendar
    */
-  async deleteEvent(eventId: string): Promise<void> {
+  async deleteEvent(eventId: string, options?: { notifyAttendees?: boolean }): Promise<void> {
     try {
       await this.ensureValidToken();
 
       await this.calendar.events.delete({
         calendarId: this.calendarId,
-        eventId: eventId
+        eventId: eventId,
+        ...(options?.notifyAttendees === false ? { sendUpdates: 'none' } : {})
       });
 
       this.log('info', `Deleted event ${eventId} from Google Calendar`);

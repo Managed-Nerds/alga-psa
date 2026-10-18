@@ -5,6 +5,7 @@ const shared = vi.hoisted(() => ({
   providerErrors: [] as Error[],
   syncCalls: [] as Array<{ entryId: string; providerId: string }>,
   deleteCalls: [] as Array<{ entryId: string; providerId: string; scope: string }>,
+  removeCalls: [] as Array<{ entryId: string; providerId: string }>,
 }));
 
 const eventHandlers = vi.hoisted(() => new Map<string, Set<(event: any) => Promise<void>>>());
@@ -55,6 +56,10 @@ vi.mock('@alga-psa/ee-calendar/lib/services/calendar/CalendarSyncService', () =>
       shared.deleteCalls.push({ entryId, providerId, scope });
       return { success: true };
     }
+
+    async removeProviderCopy(entryId: string, providerId: string) {
+      shared.removeCalls.push({ entryId, providerId });
+    }
   },
 }));
 
@@ -79,6 +84,7 @@ describe('enterprise calendarSyncSubscriber', () => {
     eventHandlers.clear();
     shared.syncCalls.length = 0;
     shared.deleteCalls.length = 0;
+    shared.removeCalls.length = 0;
     shared.providerErrors.length = 0;
     shared.providers = [
       {
@@ -150,5 +156,67 @@ describe('enterprise calendarSyncSubscriber', () => {
         scope: 'all',
       },
     ]);
+  });
+
+  it('keeps a moved entry when its calendar changes and only updates the provider copy', async () => {
+    const subscriberModule = await import('@alga-psa/ee-calendar/event-bus');
+
+    await subscriberModule.registerCalendarSyncSubscriber();
+    for (const [beforeCalendar, afterCalendar] of [[null, 'group-1'], ['group-1', null]]) {
+      await publish('SCHEDULE_ENTRY_UPDATED', {
+        entryId: 'entry-move',
+        tenantId: 'tenant-1',
+        changes: {
+          before: { assignedUserIds: ['user-1'], calendarId: beforeCalendar, isPrivate: !beforeCalendar },
+          after: { assignedUserIds: ['user-1'], calendarId: afterCalendar, isPrivate: false },
+        },
+      });
+    }
+
+    expect(shared.syncCalls).toEqual([
+      { entryId: 'entry-move', providerId: 'provider-1' },
+      { entryId: 'entry-move', providerId: 'provider-1' },
+    ]);
+    expect(shared.deleteCalls).toEqual([]);
+    expect(shared.removeCalls).toEqual([]);
+  });
+
+  it('removes only the unassigned user\'s provider copy and never deletes the entry', async () => {
+    shared.providers = [
+      { id: 'provider-a', tenant: 'tenant-1', user_id: 'user-a', sync_direction: 'bidirectional' },
+      { id: 'provider-b', tenant: 'tenant-1', user_id: 'user-b', sync_direction: 'bidirectional' },
+    ];
+    const subscriberModule = await import('@alga-psa/ee-calendar/event-bus');
+
+    await subscriberModule.registerCalendarSyncSubscriber();
+    await publish('SCHEDULE_ENTRY_UPDATED', {
+      entryId: 'entry-ab',
+      tenantId: 'tenant-1',
+      changes: {
+        before: { assignedUserIds: ['user-a', 'user-b'] },
+        after: { assignedUserIds: ['user-a'] },
+      },
+    });
+
+    expect(shared.removeCalls).toEqual([{ entryId: 'entry-ab', providerId: 'provider-b' }]);
+    expect(shared.syncCalls).toEqual([{ entryId: 'entry-ab', providerId: 'provider-a' }]);
+    expect(shared.deleteCalls).toEqual([]);
+  });
+
+  it('does not treat an update without reported assignees as an unassignment', async () => {
+    const subscriberModule = await import('@alga-psa/ee-calendar/event-bus');
+
+    await subscriberModule.registerCalendarSyncSubscriber();
+    await publish('SCHEDULE_ENTRY_UPDATED', {
+      entryId: 'entry-raw',
+      tenantId: 'tenant-1',
+      changes: {
+        before: { assignedUserIds: ['user-1'] },
+        after: { calendar_id: 'group-1' },
+      },
+    });
+
+    expect(shared.deleteCalls).toEqual([]);
+    expect(shared.removeCalls).toEqual([]);
   });
 });

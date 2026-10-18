@@ -118,9 +118,10 @@ export abstract class BaseCalendarAdapter {
   abstract updateEvent(eventId: string, event: Partial<ExternalCalendarEvent>): Promise<ExternalCalendarEvent>;
 
   /**
-   * Delete an event from the external calendar
+   * Delete an event from the external calendar. `notifyAttendees: false` asks
+   * the provider not to send attendees a cancellation, where it supports that.
    */
-  abstract deleteEvent(eventId: string): Promise<void>;
+  abstract deleteEvent(eventId: string, options?: { notifyAttendees?: boolean }): Promise<void>;
 
   /**
    * Get event details from the external calendar

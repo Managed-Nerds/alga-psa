@@ -855,16 +855,18 @@ export class CalendarSyncService {
         .where({ calendar_id: entry.calendar_id, calendar_type: 'group', is_archived: true }).first();
       if (archived) return { success: true };
     }
+    // A copy left on the calendar of a user who is no longer assigned only loses its
+    // mapping; deleting it there must never delete the entry for the remaining assignees.
+    if (!entry.assigned_user_ids.includes(provider.user_id)) {
+      await tenantDb(knex, tenant).table('calendar_event_mappings')
+        .where({ schedule_entry_id: entryId, calendar_provider_id: providerId }).del();
+      return { success: true };
+    }
     const access = await this.resolveProviderUserAccess(knex, tenant, provider.user_id);
     if (!access) return { success: false, error: 'Provider user not found' };
     const decision = evaluateEntryAccess(entry, access);
     if (decision.canEdit && entry.assigned_user_ids.length === 1) {
       return this.deleteScheduleEntry(entryId, providerId, 'all', true);
-    }
-    if (!entry.assigned_user_ids.includes(provider.user_id)) {
-      await tenantDb(knex, tenant).table('calendar_event_mappings')
-        .where({ schedule_entry_id: entryId, calendar_provider_id: providerId }).del();
-      return { success: true };
     }
     // A read-only sole assignee may be removed, leaving group or personal entries unassigned intentionally.
     const updated = await ScheduleEntry.update(knex, tenant, entryId, {
@@ -891,27 +893,36 @@ export class CalendarSyncService {
     return resolveCalendarAccess(knex, tenant, viewer, canViewAll);
   }
 
+  /**
+   * Remove one provider's copy of an entry and its mapping; the Alga entry is kept.
+   * The mapping goes first, so the provider's delete notification for this event finds
+   * nothing to act on and cannot echo back as an inbound delete of the entry.
+   */
   async removeProviderCopy(entryId: string, providerId: string): Promise<void> {
     const { knex, tenant } = await createTenantKnex();
     if (!tenant) throw new Error('Tenant context is required for calendar synchronization');
     const mapping = await this.getMappingByScheduleEntry(entryId, providerId, tenant);
     if (!mapping) return;
+    const mappingRow = await tenantDb(knex, tenant).table('calendar_event_mappings').where('id', mapping.id).first();
+    await tenantDb(knex, tenant).table('calendar_event_mappings').where('id', mapping.id).del();
     const provider = await this.providerService.getProvider(providerId, tenant);
     if (provider) {
       try {
         const adapter = await this.createAdapter(provider);
         await adapter.connect();
-        await adapter.deleteEvent(mapping.external_event_id);
+        // Alga is removing its own copy: attendees get no cancellation.
+        await adapter.deleteEvent(mapping.external_event_id, { notifyAttendees: false });
       } catch (error: any) {
-        // Already gone on the provider side: the copy is removed, so the mapping must go too,
+        // Already gone on the provider side: the copy is removed, so the mapping stays gone,
         // or a later restore would try to update an event that no longer exists.
         if (!isProviderEventGone(error)) {
           console.warn(`Failed to delete external event ${mapping.external_event_id}:`, error.message);
+          // The copy still exists: restore the mapping so a retry can find and remove it.
+          if (mappingRow) await tenantDb(knex, tenant).table('calendar_event_mappings').insert(mappingRow);
           throw error;
         }
       }
     }
-    await tenantDb(knex, tenant).table('calendar_event_mappings').where('id', mapping.id).del();
   }
 
   /**

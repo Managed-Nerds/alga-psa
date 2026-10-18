@@ -153,8 +153,11 @@ async function handleScheduleEntryUpdated(event: ScheduleEntryUpdatedEvent): Pro
         tenantId
       });
 
-      // Get assigned user IDs from the updated entry (after state)
-      const assignedUserIds = changes?.after?.assignedUserIds || [];
+      // Get assigned user IDs from the updated entry (after state). An update
+      // that does not report its assignees is never read as an unassignment.
+      const afterAssignedUserIds = changes?.after?.assignedUserIds;
+      const reportsAssignees = Array.isArray(afterAssignedUserIds);
+      const assignedUserIds: string[] = reportsAssignees ? afterAssignedUserIds : [];
 
       if (!providerService) {
         providerService = new CalendarProviderService();
@@ -196,7 +199,7 @@ async function handleScheduleEntryUpdated(event: ScheduleEntryUpdatedEvent): Pro
         // Only sync to providers where the provider's user is assigned to the entry
         // For updates, we also need to handle the case where user was unassigned (delete from their calendar)
         const userIsAssigned = assignedUserIds.includes(provider.user_id);
-        const userWasAssigned = (changes?.before?.assignedUserIds || []).includes(provider.user_id);
+        const userWasAssigned = reportsAssignees && (changes?.before?.assignedUserIds || []).includes(provider.user_id);
 
         if (!userIsAssigned && !userWasAssigned) {
           logger.debug('[CalendarSyncSubscriber] Skipping provider - user not assigned to entry', {
@@ -222,16 +225,16 @@ async function handleScheduleEntryUpdated(event: ScheduleEntryUpdatedEvent): Pro
             continue;
           }
 
-          // If user was assigned but no longer is, delete from their calendar
+          // If user was assigned but no longer is, remove only their provider copy.
+          // The entry itself stays in Alga for everyone else (deleteScheduleEntry
+          // would delete it outright).
           if (userWasAssigned && !userIsAssigned && provider.user_id) {
-            const result = await syncService.deleteScheduleEntry(entryId, provider.id, 'all');
-            if (result.success) {
-              logger.info('[CalendarSyncSubscriber] Removed entry from calendar after user unassignment', {
-                entryId,
-                calendarProviderId: provider.id,
-                userId: provider.user_id
-              });
-            }
+            await syncService.removeProviderCopy(entryId, provider.id);
+            logger.info('[CalendarSyncSubscriber] Removed entry from calendar after user unassignment', {
+              entryId,
+              calendarProviderId: provider.id,
+              userId: provider.user_id
+            });
             continue;
           }
 
