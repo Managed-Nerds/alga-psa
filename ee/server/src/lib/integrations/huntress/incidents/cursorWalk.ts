@@ -1,14 +1,20 @@
 /**
- * Cursor-bounded collection of Huntress incident reports.
+ * Cursor-bounded collection of Huntress list results (incident reports,
+ * escalations).
  *
  * The Huntress API cannot filter by "updated since"; callers fetch pages
  * sorted by updated_at DESC and this walker stops once rows fall behind the
  * boundary (cursor minus a small overlap, or the backfill window on first
- * run). Reprocessing inside the overlap is harmless — the processor dedups
+ * run). Reprocessing inside the overlap is harmless — the processors dedup
  * on external_alert_id.
  */
 
 import type { HuntressIncidentReport } from '../../../../interfaces/huntress.interfaces';
+
+export interface CursorWalkItemsPage<T> {
+  items: T[];
+  nextPageToken?: string;
+}
 
 export interface CursorWalkPage {
   incidents: HuntressIncidentReport[];
@@ -30,10 +36,10 @@ export interface CursorWalkOptions {
 const DEFAULT_OVERLAP_MS = 60_000;
 const DEFAULT_MAX_PAGES = 20;
 
-export async function collectIncidentsSince(
-  fetchPage: FetchIncidentsPage,
+export async function collectUpdatedSince<T extends { updated_at: string }>(
+  fetchPage: (pageToken?: string) => Promise<CursorWalkItemsPage<T>>,
   options: CursorWalkOptions
-): Promise<HuntressIncidentReport[]> {
+): Promise<T[]> {
   const now = options.now ?? new Date();
   const overlapMs = options.overlapMs ?? DEFAULT_OVERLAP_MS;
   const maxPages = options.maxPages ?? DEFAULT_MAX_PAGES;
@@ -42,14 +48,14 @@ export async function collectIncidentsSince(
     ? Date.parse(options.cursorIso) - overlapMs
     : now.getTime() - options.backfillDays * 24 * 60 * 60 * 1000;
 
-  const collected: HuntressIncidentReport[] = [];
+  const collected: T[] = [];
   let pageToken: string | undefined;
 
   for (let page = 0; page < maxPages; page++) {
     const result = await fetchPage(pageToken);
     let hitBoundary = false;
 
-    for (const item of result.incidents) {
+    for (const item of result.items) {
       const updatedMs = Date.parse(item.updated_at);
       if (Number.isFinite(updatedMs) && updatedMs >= boundaryMs) {
         collected.push(item);
@@ -64,4 +70,14 @@ export async function collectIncidentsSince(
   }
 
   return collected.sort((a, b) => Date.parse(a.updated_at) - Date.parse(b.updated_at));
+}
+
+export async function collectIncidentsSince(
+  fetchPage: FetchIncidentsPage,
+  options: CursorWalkOptions
+): Promise<HuntressIncidentReport[]> {
+  return collectUpdatedSince(async (pageToken) => {
+    const page = await fetchPage(pageToken);
+    return { items: page.incidents, nextPageToken: page.nextPageToken };
+  }, options);
 }

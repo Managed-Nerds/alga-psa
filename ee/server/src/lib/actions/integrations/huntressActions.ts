@@ -266,6 +266,7 @@ export interface HuntressSettingsUpdate {
   closedStatusId?: string | null;
   pollIntervalMinutes?: number;
   backfillDays?: number;
+  ingestEscalations?: boolean;
 }
 
 export const updateHuntressSettings = withHuntressAccess(
@@ -306,8 +307,12 @@ export const updateHuntressSettings = withHuntressAccess(
         ? { pollIntervalMinutes: updates.pollIntervalMinutes }
         : {}),
       ...(updates.backfillDays !== undefined ? { backfillDays: updates.backfillDays } : {}),
+      ...(updates.ingestEscalations !== undefined
+        ? { ingestEscalations: updates.ingestEscalations }
+        : {}),
     });
     merged.incidentCursor = current.incidentCursor;
+    merged.escalationCursor = current.escalationCursor;
 
     await db.table('rmm_integrations')
       .where({ integration_id: row.integration_id })
